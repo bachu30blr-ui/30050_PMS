@@ -1,0 +1,258 @@
+import streamlit as st
+import pandas as pd
+from datetime import date
+from backend import (
+    create_user,
+    read_user_by_email,
+    read_all_employees,
+    create_goal,
+    read_goals_for_employee,
+    update_goal_status,
+    create_task,
+    read_tasks_for_goal,
+    update_task_status,
+    create_feedback,
+    read_feedback_for_goal,
+    get_insights,
+    get_performance_history
+)
+
+# --- App Configuration and State Management ---
+st.set_page_config(layout="wide", page_title="Performance Management System")
+
+# Session state variables to manage user login and role
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_role = None
+    st.session_state.user_id = None
+    st.session_state.user_name = None
+
+# --- Helper Functions ---
+def logout():
+    """Logs out the current user."""
+    st.session_state.logged_in = False
+    st.session_state.user_role = None
+    st.session_state.user_id = None
+    st.session_state.user_name = None
+    st.info("You have been logged out.")
+    st.experimental_rerun()
+
+def display_goal_card(goal):
+    """Renders a single goal as a card."""
+    goal_id, description, due_date, status = goal
+    with st.expander(f"**Goal ID:** {goal_id} | **Status:** {status} | **Due Date:** {due_date.strftime('%Y-%m-%d')}", expanded=True):
+        st.write(f"**Description:** {description}")
+        
+        # Display Tasks
+        st.markdown("##### Tasks")
+        tasks = read_tasks_for_goal(goal_id)
+        if tasks:
+            tasks_df = pd.DataFrame(tasks, columns=["Task ID", "Description", "Status"])
+            st.dataframe(tasks_df, use_container_width=True)
+        else:
+            st.info("No tasks added yet.")
+
+        # Display Feedback
+        st.markdown("##### Feedback")
+        feedback = read_feedback_for_goal(goal_id)
+        if feedback:
+            feedback_df = pd.DataFrame(feedback, columns=["Feedback", "Date"])
+            st.dataframe(feedback_df, use_container_width=True)
+        else:
+            st.info("No feedback provided yet.")
+            
+def manager_view():
+    """Displays the manager-specific dashboard."""
+    st.title(f"Welcome, Manager {st.session_state.user_name}!")
+    st.markdown("### Goal & Task Management")
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["Set Goals", "Update Goal Status", "Provide Feedback", "Business Insights"])
+    
+    with tab1:
+        st.subheader("Set a New Goal for an Employee")
+        employees = read_all_employees()
+        employee_map = {name: user_id for user_id, name in employees}
+        employee_names = list(employee_map.keys())
+        
+        if employee_names:
+            selected_employee_name = st.selectbox("Select Employee", employee_names)
+            selected_employee_id = employee_map[selected_employee_name]
+            
+            goal_desc = st.text_area("Goal Description", placeholder="e.g., Achieve 10% sales growth in Q4.")
+            due_date = st.date_input("Due Date", date.today())
+            
+            if st.button("Create Goal"):
+                if create_goal(selected_employee_id, st.session_state.user_id, goal_desc, due_date):
+                    st.success(f"Goal created for {selected_employee_name} successfully!")
+                else:
+                    st.error("Failed to create goal.")
+        else:
+            st.warning("No employees found. Please register an employee first.")
+            
+    with tab2:
+        st.subheader("Update an Employee's Goal Status")
+        if employee_names:
+            selected_employee_name_update = st.selectbox("Select Employee to View Goals", employee_names, key="update_emp_select")
+            selected_employee_id_update = employee_map[selected_employee_name_update]
+            
+            goals = read_goals_for_employee(selected_employee_id_update)
+            if goals:
+                goal_options = {f"{g[0]} - {g[1]}": g[0] for g in goals}
+                selected_goal_text = st.selectbox("Select Goal to Update", list(goal_options.keys()))
+                selected_goal_id = goal_options[selected_goal_text]
+                
+                new_status = st.selectbox("New Status", ["Draft", "In Progress", "Completed", "Cancelled"])
+                
+                if st.button("Update Goal Status"):
+                    if update_goal_status(selected_goal_id, new_status):
+                        st.success("Goal status updated successfully!")
+                    else:
+                        st.error("Failed to update goal status.")
+            else:
+                st.info("No goals found for this employee.")
+                
+    with tab3:
+        st.subheader("Provide Feedback on a Goal")
+        if employee_names:
+            selected_employee_name_feedback = st.selectbox("Select Employee", employee_names, key="feedback_emp_select")
+            selected_employee_id_feedback = employee_map[selected_employee_name_feedback]
+
+            goals_for_feedback = read_goals_for_employee(selected_employee_id_feedback)
+            if goals_for_feedback:
+                goal_options_feedback = {f"{g[0]} - {g[1]}": g[0] for g in goals_for_feedback}
+                selected_goal_text_feedback = st.selectbox("Select Goal", list(goal_options_feedback.keys()))
+                selected_goal_id_feedback = goal_options_feedback[selected_goal_text_feedback]
+
+                feedback_text = st.text_area("Your Feedback")
+                if st.button("Submit Feedback"):
+                    if create_feedback(selected_goal_id_feedback, st.session_state.user_id, selected_employee_id_feedback, feedback_text):
+                        st.success("Feedback submitted successfully!")
+                    else:
+                        st.error("Failed to submit feedback.")
+            else:
+                st.info("No goals available to provide feedback on.")
+
+    with tab4:
+        st.subheader("Business Insights Dashboard")
+        insights = get_insights()
+        
+        if insights:
+            st.metric(label="Total Users", value=insights.get('total_users', 0))
+            st.metric(label="Total Goals", value=insights.get('total_goals', 0))
+            st.metric(
+    label="Average Tasks per Goal",
+    value=float(insights.get('avg_tasks_per_goal', 0))
+)
+            
+            st.markdown("#### Goal Status Breakdown")
+            st.bar_chart(pd.DataFrame(list(insights.get('goal_status_breakdown', {}).items()), columns=['Status', 'Count']).set_index('Status'))
+
+            st.markdown("#### Task Status Breakdown")
+            st.bar_chart(pd.DataFrame(list(insights.get('task_status_breakdown', {}).items()), columns=['Status', 'Count']).set_index('Status'))
+
+            st.write("---")
+            st.write(f"**Oldest Goal:** {insights.get('oldest_goal_date')}")
+            st.write(f"**Newest Goal:** {insights.get('newest_goal_date')}")
+        else:
+            st.warning("No data available for insights.")
+            
+def employee_view():
+    """Displays the employee-specific dashboard."""
+    st.title(f"Welcome, Employee {st.session_state.user_name}! 🚀")
+    
+    st.markdown("### Your Goals and Progress")
+    
+    goals = read_goals_for_employee(st.session_state.user_id)
+    if goals:
+        for goal in goals:
+            display_goal_card(goal)
+            
+            # Add Task to Goal
+            st.markdown("---")
+            st.subheader(f"Add a new task for Goal ID: {goal[0]}")
+            task_desc = st.text_input(f"Task Description (for Goal {goal[0]})", key=f"task_desc_{goal[0]}")
+            if st.button(f"Add Task to Goal {goal[0]}", key=f"add_task_{goal[0]}"):
+                if create_task(goal[0], st.session_state.user_id, task_desc):
+                    st.success("Task added and awaiting manager approval!")
+                else:
+                    st.error("Failed to add task.")
+
+    else:
+        st.info("You currently have no goals assigned. Please check back later.")
+    
+    st.markdown("---")
+    st.header("Your Performance History")
+    history = get_performance_history(st.session_state.user_id)
+    if history:
+        history_df = pd.DataFrame(history, columns=["Goal Description", "Goal Status", "Due Date", "Task Description", "Task Status", "Feedback"])
+        st.dataframe(history_df, use_container_width=True)
+    else:
+        st.info("No performance history to display.")
+
+def analytics_dashboard():
+    """Displays the analytics dashboard with charts and KPIs."""
+    st.title("📊 Analytics Dashboard")
+    insights = get_insights()
+    if not insights:
+        st.warning("No analytics data available.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Users", insights.get('total_users', 0))
+    col2.metric("Total Goals", insights.get('total_goals', 0))
+    col3.metric(
+        "Avg Tasks per Goal",
+        float(insights.get('avg_tasks_per_goal', 0))
+    )
+
+    st.markdown("#### Goal Status Breakdown")
+    goal_status = insights.get('goal_status_breakdown', {})
+    if goal_status:
+        st.bar_chart(pd.DataFrame(list(goal_status.items()), columns=['Status', 'Count']).set_index('Status'))
+    else:
+        st.info("No goal status data.")
+
+    st.markdown("#### Task Status Breakdown")
+    task_status = insights.get('task_status_breakdown', {})
+    if task_status:
+        st.bar_chart(pd.DataFrame(list(task_status.items()), columns=['Status', 'Count']).set_index('Status'))
+    else:
+        st.info("No task status data.")
+
+    st.markdown("#### Goal Timeline")
+    st.write(f"**Oldest Goal:** {insights.get('oldest_goal_date')}")
+    st.write(f"**Newest Goal:** {insights.get('newest_goal_date')}")
+
+# --- Main App Logic ---
+def main():
+    # TEMP: Hardcode login for testing
+    if not st.session_state.logged_in:
+        st.session_state.logged_in = True
+        st.session_state.user_role = "Manager"  # or "Employee"
+        st.session_state.user_id = 1            # Use a valid user_id from your DB
+        st.session_state.user_name = "Test Manager"  # Or the employee's name
+
+    # Now the rest of your logic
+    if not st.session_state.logged_in:
+        st.info("Please contact your administrator to get access.")
+        return
+    else:
+        st.sidebar.header(f"Logged in as: {st.session_state.user_name}")
+        st.sidebar.button("Logout", on_click=logout)
+
+        # Add navigation for dashboard
+        page = st.sidebar.radio(
+            "Navigate",
+            ("Dashboard", "Analytics Dashboard")
+        )
+
+        if page == "Dashboard":
+            if st.session_state.user_role == "Manager":
+                manager_view()
+            elif st.session_state.user_role == "Employee":
+                employee_view()
+        elif page == "Analytics Dashboard":
+            analytics_dashboard()
+
+if __name__ == "__main__":
+    main()
